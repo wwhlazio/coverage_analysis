@@ -1,0 +1,64 @@
+
+#1. Down load the data to local or cloud (assume wget is installed and there is public access)
+wget –c ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes_project/data/CEU/NA12878/alignment/NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.cram
+wget –c ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes_project/data/CEU/NA12878/alignment/NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.cram.crai
+
+#2. Transform cram to bam (assume samtools is installed). reference_file is the file path for reference genome GRCH38 which is already indexed by “samtools faidx” and index the bam file
+Samtools view –T reference_file –b –o \ NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam \
+NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.cram \
+Samtools index NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam
+#3. Check the quality of bam file (assume Picard is installed and represented by pseudo path $PICARD)
+#3.1 insert size checking
+java -Xmx24g -jar $PICARD CollectInsertSizeMetrics \
+I= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam \
+O= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_insert_size_metrics.txt \
+H= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_insert_size_metrics.pdf
+#3.2 alignment summary
+java -Xmx24g -jar $PICARD CollectAlignmentSummaryMetrics \
+I= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam \
+O= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_alignment_metrics.txt \
+R= reference_file
+#3.3 GC bias checking
+java -Xmx24g -jar $PICARD CollectGcBiasMetrics \ I=NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam \ O=NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_gc_bias_metrics.txt \ R=/workspace/inputs/references/genome/ref_genome.fa  \                                                      CHART= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage _gc_bias_metrics.pdf\  S= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage _gc_bias_summary.txt
+#4. Deduplication (PCR process could involve some duplicate reads. we need to remove these reads) also index the new bam file
+java -jar $PICARD MarkDuplicates \
+    I= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam \
+    O= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped.bam \
+    M= NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_metrics.txt \
+  REMOVE_DUPLICATES=true
+	Samtools index NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped.bam#
+#5. Local realignment (There could be misalignment around indels. Local realignment can help us to correct these potential misalignment. Assume GATK is installed)
+gatk --java-options "-Xmx4g" RealignerTargetCreator \
+     -R reference_file \
+     -I NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped.bam \
+     -O NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_ realignment_targets.list
+
+gatk --java-options "-Xmx4g" IndelRealigner \
+     -R reference_file \
+     -I input.bam \
+     -targetIntervals NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_ realignment_targets.list \
+     -O NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.bam
+
+#6. Base quality recalibration 
+
+gatk BaseRecalibrator \
+     -I input.bam \
+     -R reference_file \
+     --known-sites ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.vcf \
+     -O recal_data.table
+gatk ApplyBQSR \
+     -R reference_file \
+     -I NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.bam \
+     --bqsr-recal-file recal_data.table \
+     -O NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.recalibrated.bam
+#7. clean temporary files not useful anymore.
+rm NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.bam
+rm NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped.bam
+rm NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.bam
+rm NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage.cram
+…
+#8. report the coverage (assume bedtools is already installed) 
+bedtools genomecov –ibam NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.recalibrated.bam –d > NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.recalibrated.bed
+#if we are interested in a specific region: target.bed
+bedtools intersect –a \ NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.recalibrated.bed –b target.bed > \ NA12878.alt_bwamem_GRCh38DH.20150718.CEU.low_coverage_deduped_realigned.recalibrated_target.bed
+
